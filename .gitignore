@@ -1,0 +1,26 @@
+# Secrets — never commit
+secrets.txt
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# LangGraph checkpoints
+checkpoints/
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Outputs (keep examples/ tracked, ignore scratch runs)
+outputs/
