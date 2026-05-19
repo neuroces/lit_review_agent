@@ -6,10 +6,9 @@ import json
 import logging
 from typing import Literal
 
-from pydantic import BaseModel
-
-from lit_review_agent.config import get_anthropic_client
+from lit_review_agent.config import get_anthropic_client, get_default_model
 from lit_review_agent.state import Paper
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +111,7 @@ def critique_corpus(
     topic: str,
     papers: list[Paper],
     *,
-    model: str = "claude-sonnet-4-20250514",
+    model: str | None = None,
     max_retries: int = 2,
 ) -> CriticDecision:
     """Review the corpus and decide whether to refine or approve.
@@ -120,6 +119,8 @@ def critique_corpus(
     Returns a CriticDecision with gaps and suggested queries if refinement needed.
     """
     client = get_anthropic_client()
+    if model is None:
+        model = get_default_model()
 
     corpus_summary = _format_corpus_summary(papers)
     user_content = (

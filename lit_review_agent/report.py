@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from lit_review_agent.config import get_anthropic_client
+from lit_review_agent.config import get_anthropic_client, get_default_model
 from lit_review_agent.state import Paper
 
 logger = logging.getLogger(__name__)
@@ -92,13 +92,15 @@ def generate_report(
     topic: str,
     papers: list[Paper],
     *,
-    model: str = "claude-sonnet-4-20250514",
+    model: str | None = None,
 ) -> str:
     """Generate a structured markdown literature review from the synthesized corpus.
 
     Returns the full markdown report as a string.
     """
     client = get_anthropic_client()
+    if model is None:
+        model = get_default_model()
 
     corpus_text = _format_papers_for_report(papers)
     user_content = (

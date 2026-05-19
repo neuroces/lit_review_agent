@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import logging
 
-from pydantic import BaseModel, ValidationError
-
-from lit_review_agent.config import get_anthropic_client
+from lit_review_agent.config import get_anthropic_client, get_default_model
 from lit_review_agent.state import Paper
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +77,7 @@ Rules:
 def synthesize_paper(
     paper: Paper,
     *,
-    model: str = "claude-sonnet-4-20250514",
+    model: str | None = None,
     max_retries: int = 2,
 ) -> Paper:
     """Extract structured fields from a paper's abstract using Claude.
@@ -88,6 +87,8 @@ def synthesize_paper(
     Retries on JSON parse or Pydantic validation failures.
     """
     client = get_anthropic_client()
+    if model is None:
+        model = get_default_model()
 
     user_content = (
         f"Title: {paper.title}\n"
@@ -143,7 +144,11 @@ def synthesize_paper(
                 raw_text[:200],
             )
             if attempt == max_retries:
-                logger.error("Synthesis failed after %d retries for: %s", max_retries + 1, paper.title[:60])
+                logger.error(
+                    "Synthesis failed after %d retries for: %s",
+                    max_retries + 1,
+                    paper.title[:60],
+                )
                 return paper  # return unmodified paper
 
     # Merge extraction into a copy of the paper
@@ -154,12 +159,14 @@ def synthesize_paper(
 def synthesize_papers(
     papers: list[Paper],
     *,
-    model: str = "claude-sonnet-4-20250514",
+    model: str | None = None,
 ) -> list[Paper]:
     """Synthesize all papers sequentially. Returns list with synthesis fields filled."""
     results: list[Paper] = []
     for i, paper in enumerate(papers):
-        logger.info("Synthesizing paper %d/%d: %s", i + 1, len(papers), paper.title[:60])
+        logger.info(
+            "Synthesizing paper %d/%d: %s", i + 1, len(papers), paper.title[:60]
+        )
         result = synthesize_paper(paper, model=model)
         results.append(result)
     return results

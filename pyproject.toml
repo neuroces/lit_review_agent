@@ -19,6 +19,12 @@ dev = [
     "langsmith",
 ]
 
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: end-to-end tests with real API calls (deselect with '-m \"not integration\"')",
+]
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"

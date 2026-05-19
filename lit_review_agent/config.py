@@ -41,6 +41,14 @@ def get_anthropic_client():
     return anthropic.Anthropic(api_key=api_key)
 
 
+def get_default_model() -> str:
+    """Return the default Claude model name.
+
+    Override via ANTHROPIC_MODEL in secrets.txt.
+    """
+    return _get_secrets().get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+
 def get_semantic_scholar_headers() -> dict[str, str]:
     """Return request headers for Semantic Scholar API.
 
