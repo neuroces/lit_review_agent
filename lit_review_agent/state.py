@@ -42,3 +42,6 @@ class ReviewState(TypedDict):
     iteration: int
     max_iterations: int
     final_report: str | None
+    report_critic_feedback: list[str]
+    report_iteration: int
+    max_report_iterations: int

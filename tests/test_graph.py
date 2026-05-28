@@ -10,12 +10,13 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from lit_review_agent.graph import (
     build_graph,
     compile_graph,
     critic_node,
     critic_router,
+    report_critic_node,
+    report_critic_router,
     search_node,
     synthesize_node,
 )
@@ -27,7 +28,9 @@ from lit_review_agent.state import Paper, ReviewState
 # ---------------------------------------------------------------------------
 
 
-def _make_paper(title: str = "Test", task: str | None = None, doi: str | None = "10.1/t") -> Paper:
+def _make_paper(
+    title: str = "Test", task: str | None = None, doi: str | None = "10.1/t"
+) -> Paper:
     return Paper(
         source="pubmed",
         doi=doi,
@@ -49,6 +52,9 @@ def _base_state(**overrides) -> ReviewState:
         "iteration": 0,
         "max_iterations": 3,
         "final_report": None,
+        "report_critic_feedback": [],
+        "report_iteration": 0,
+        "max_report_iterations": 2,
     }
     defaults.update(overrides)
     return defaults
@@ -66,6 +72,7 @@ class TestGraphConstruction:
         assert "synthesize" in graph.nodes
         assert "critic" in graph.nodes
         assert "report" in graph.nodes
+        assert "report_critic" in graph.nodes
 
     def test_compiles_successfully(self):
         app = compile_graph()
@@ -157,7 +164,10 @@ class TestCriticNode:
     @patch("lit_review_agent.graph.critique_corpus")
     def test_adds_feedback(self, mock_critique):
         mock_critique.return_value = MagicMock(
-            decision="approve", gaps=[], suggested_queries=[], reasoning="Coverage adequate"
+            decision="approve",
+            gaps=[],
+            suggested_queries=[],
+            reasoning="Coverage adequate",
         )
         state = _base_state(critic_feedback=["prev feedback"])
         result = critic_node(state)
@@ -211,3 +221,80 @@ class TestCriticRouter:
     def test_routes_to_report_with_no_feedback(self):
         state = _base_state(iteration=1)
         assert critic_router(state) == "report"
+
+
+# ---------------------------------------------------------------------------
+# report_critic_node
+# ---------------------------------------------------------------------------
+
+
+class TestReportCriticNode:
+    @patch("lit_review_agent.graph.critique_report")
+    def test_increments_report_iteration(self, mock_critique):
+        mock_critique.return_value = MagicMock(
+            decision="approve", issues=[], reasoning="Report is grounded."
+        )
+        state = _base_state(
+            final_report="# Report\nSome content.",
+            report_iteration=0,
+        )
+        result = report_critic_node(state)
+        assert result["report_iteration"] == 1
+
+    @patch("lit_review_agent.graph.critique_report")
+    def test_adds_feedback(self, mock_critique):
+        mock_critique.return_value = MagicMock(
+            decision="approve", issues=[], reasoning="All claims verified."
+        )
+        state = _base_state(
+            final_report="# Report",
+            report_critic_feedback=["prev feedback"],
+        )
+        result = report_critic_node(state)
+        assert len(result["report_critic_feedback"]) == 2
+        assert "All claims verified" in result["report_critic_feedback"][-1]
+
+    @patch("lit_review_agent.graph.critique_report")
+    def test_revise_preserves_issues(self, mock_critique):
+        mock_critique.return_value = MagicMock(
+            decision="revise",
+            issues=["Cohort size mismatch for Paper 3"],
+            reasoning="Revise needed — factual errors found.",
+        )
+        state = _base_state(final_report="# Report")
+        result = report_critic_node(state)
+        assert "Revise needed" in result["report_critic_feedback"][-1]
+
+
+# ---------------------------------------------------------------------------
+# report_critic_router
+# ---------------------------------------------------------------------------
+
+
+class TestReportCriticRouter:
+    def test_routes_to_end_on_approve(self):
+        state = _base_state(
+            report_iteration=1,
+            report_critic_feedback=["Report iteration 0: Approved"],
+        )
+        assert report_critic_router(state) == "end"
+
+    def test_routes_to_report_on_revise(self):
+        state = _base_state(
+            report_iteration=1,
+            max_report_iterations=2,
+            report_critic_feedback=["Report iteration 0: Revise needed"],
+        )
+        assert report_critic_router(state) == "report"
+
+    def test_routes_to_end_at_max_iterations(self):
+        state = _base_state(
+            report_iteration=2,
+            max_report_iterations=2,
+            report_critic_feedback=["Report iteration 1: Revise needed"],
+        )
+        assert report_critic_router(state) == "end"
+
+    def test_routes_to_end_with_no_feedback(self):
+        state = _base_state(report_iteration=1)
+        assert report_critic_router(state) == "end"

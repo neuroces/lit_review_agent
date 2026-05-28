@@ -1,16 +1,19 @@
-"""LangGraph graph wiring — orchestrates Search → Synthesize → Critic → Report.
+"""LangGraph graph wiring — orchestrates Search → Synthesize → Critic → Report → Report Critic.
 
-The graph implements a feedback loop:
+The graph implements two feedback loops:
 
     START → search_node → synthesize_node → critic_node ─┐
                 ↑                                         │
                 └──── (refine: add queries, loop back) ───┘
                                                           │
-                                        (approve) → report_node → END
+                          (approve) → report_node → report_critic_node ─┐
+                                          ↑                              │
+                                          └── (revise: loop back) ──────┘
+                                                                         │
+                                                          (approve) → END
 
-The Critic acts as a router: if coverage gaps exist and iterations remain,
-it sends the graph back to search with new queries. Otherwise, it proceeds
-to report generation.
+The Critic acts as a corpus coverage router, and the Report Critic acts as
+a grounding/fact-check router that verifies the report against source papers.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import time
 from langgraph.graph import END, START, StateGraph
 from lit_review_agent.critic import critique_corpus
 from lit_review_agent.report import generate_report
+from lit_review_agent.report_critic import critique_report
 from lit_review_agent.state import Paper, ReviewState
 from lit_review_agent.synthesis import synthesize_papers
 from lit_review_agent.tools import dedupe_papers, search_pubmed, search_semantic_scholar
@@ -132,8 +136,36 @@ def report_node(state: ReviewState) -> dict:
     return {"final_report": report}
 
 
+def report_critic_node(state: ReviewState) -> dict:
+    """Verify the generated report is grounded in source paper data."""
+    topic = state["topic"]
+    papers = state["papers"]
+    report = state["final_report"]
+    report_iteration = state.get("report_iteration", 0)
+
+    decision = critique_report(topic, papers, report)
+
+    logger.info(
+        "Report critic node (iter %d): decision=%s, %d issues",
+        report_iteration,
+        decision.decision,
+        len(decision.issues),
+    )
+
+    feedback = state.get("report_critic_feedback", [])
+    if decision.reasoning:
+        feedback = feedback + [
+            f"Report iteration {report_iteration}: {decision.reasoning}"
+        ]
+
+    return {
+        "report_critic_feedback": feedback,
+        "report_iteration": report_iteration + 1,
+    }
+
+
 # ---------------------------------------------------------------------------
-# Conditional edge: critic decides next step
+# Conditional edges: critic and report critic decide next steps
 # ---------------------------------------------------------------------------
 
 
@@ -161,6 +193,31 @@ def critic_router(state: ReviewState) -> str:
     return "report"
 
 
+def report_critic_router(state: ReviewState) -> str:
+    """Route after report critic: loop back to report or proceed to END."""
+    report_iteration = state.get("report_iteration", 0)
+    max_report_iter = state.get("max_report_iterations", 2)
+
+    feedback = state.get("report_critic_feedback", [])
+    last_feedback = feedback[-1] if feedback else ""
+
+    # If we've hit max report iterations, always proceed to END
+    if report_iteration >= max_report_iter:
+        logger.info(
+            "Report critic router: max iterations (%d) reached → end",
+            max_report_iter,
+        )
+        return "end"
+
+    # Check if report critic requested revision
+    if "revise" in last_feedback.lower():
+        logger.info("Report critic router: revision requested → report")
+        return "report"
+
+    logger.info("Report critic router: approved → end")
+    return "end"
+
+
 # ---------------------------------------------------------------------------
 # Graph construction
 # ---------------------------------------------------------------------------
@@ -175,6 +232,7 @@ def build_graph() -> StateGraph:
     graph.add_node("synthesize", synthesize_node)
     graph.add_node("critic", critic_node)
     graph.add_node("report", report_node)
+    graph.add_node("report_critic", report_critic_node)
 
     # Linear edges
     graph.add_edge(START, "search")
@@ -188,8 +246,15 @@ def build_graph() -> StateGraph:
         {"search": "search", "report": "report"},
     )
 
-    # Report → END
-    graph.add_edge("report", END)
+    # Report → Report Critic
+    graph.add_edge("report", "report_critic")
+
+    # Conditional edge from report critic
+    graph.add_conditional_edges(
+        "report_critic",
+        report_critic_router,
+        {"report": "report", "end": END},
+    )
 
     return graph
 
@@ -208,6 +273,7 @@ def run_review(
     topic: str,
     initial_queries: list[str] | None = None,
     max_iterations: int = 3,
+    max_report_iterations: int = 2,
 ) -> ReviewState:
     """Run the full literature review pipeline.
 
@@ -215,6 +281,7 @@ def run_review(
         topic: The Health AI topic to review.
         initial_queries: Search queries to start with. If None, uses the topic directly.
         max_iterations: Max critic feedback loops before forcing report generation.
+        max_report_iterations: Max report critic loops before accepting the report.
 
     Returns:
         Final ReviewState with papers and report.
@@ -230,6 +297,9 @@ def run_review(
         "iteration": 0,
         "max_iterations": max_iterations,
         "final_report": None,
+        "report_critic_feedback": [],
+        "report_iteration": 0,
+        "max_report_iterations": max_report_iterations,
     }
 
     app = compile_graph()

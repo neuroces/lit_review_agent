@@ -27,16 +27,17 @@ by deterministic code.
 ## How It Works
 
 You provide a research topic (e.g., *"Wearable PPG-based atrial fibrillation detection"*)
-and optional search queries. The system runs a pipeline of 4 AI agents that:
+and optional search queries. The system runs a pipeline of 5 AI agents that:
 
 1. **Search** — queries PubMed and Semantic Scholar for relevant papers
 2. **Synthesize** — uses Claude to extract structured fields from each abstract (task, devices, cohort, metrics, etc.)
 3. **Critique** — evaluates corpus coverage and decides whether more papers are needed
 4. **Report** — generates a full markdown literature review with comparison tables
+5. **Report Critic** — verifies the report is grounded in source papers (no hallucinated claims)
 
-The Critic agent creates a feedback loop: if it finds coverage gaps (e.g., missing device types,
-narrow demographics, or underrepresented task families), it sends new search queries back to the
-Search agent. This loop repeats until the Critic approves the corpus or `max_iterations` is reached.
+The system has two feedback loops:
+- **Corpus loop**: the Critic evaluates coverage and sends new search queries back to Search if gaps are found. Repeats until approved or `max_iterations` is reached.
+- **Report loop**: the Report Critic fact-checks the generated report against source paper data. If it finds fabricated claims, wrong numbers, or missing papers, the report is regenerated. Repeats until approved or `max_report_iterations` is reached.
 
 ## Architecture
 
@@ -47,17 +48,20 @@ graph TD
     Synthesize --> Critic
     Critic -->|gaps found & iter < max| Search
     Critic -->|approved or max iter| Report
-    Report --> END([End])
+    Report --> ReportCritic[Report Critic]
+    ReportCritic -->|grounding issues & iter < max| Report
+    ReportCritic -->|approved or max iter| END([End])
 ```
 
 ### Agent Details
 
 | Agent | Module | Role | Input → Output |
-|-------|--------|------|-----------------|
+|-------|--------|------|------------------|
 | **Search** | `tools.py` | Query PubMed + Semantic Scholar, deduplicate | `search_queries` → `papers` |
 | **Synthesis** | `synthesis.py` | Extract structured fields from abstracts via Claude | `papers` (raw) → `papers` (with synthesis fields) |
 | **Critic** | `critic.py` | Evaluate coverage, decide refine vs. approve | `papers` + `topic` → `CriticDecision` |
 | **Report** | `report.py` | Generate markdown literature review | `papers` + `topic` → `final_report` |
+| **Report Critic** | `report_critic.py` | Verify report is grounded in source papers | `final_report` + `papers` + `topic` → `ReportCriticDecision` |
 
 ### Shared State
 
@@ -65,13 +69,16 @@ All agents communicate through a `ReviewState` dictionary:
 
 ```python
 class ReviewState(TypedDict):
-    topic: str                    # Research topic
-    search_queries: list[str]     # Current search queries
-    papers: list[Paper]           # Accumulated corpus
-    critic_feedback: list[str]    # Audit trail of critic decisions
-    iteration: int                # Current iteration count
-    max_iterations: int           # Max allowed loops
-    final_report: str | None      # Output markdown
+    topic: str                        # Research topic
+    search_queries: list[str]         # Current search queries
+    papers: list[Paper]               # Accumulated corpus
+    critic_feedback: list[str]        # Audit trail of critic decisions
+    iteration: int                    # Current iteration count
+    max_iterations: int               # Max allowed corpus loops
+    final_report: str | None          # Output markdown
+    report_critic_feedback: list[str] # Audit trail of report grounding checks
+    report_iteration: int             # Current report revision count
+    max_report_iterations: int        # Max allowed report revision loops
 ```
 
 Each `Paper` carries both bibliographic metadata (title, authors, year, abstract, DOI) and
@@ -82,9 +89,10 @@ evaluation metrics, key findings, limitations, etc.).
 
 - **Incremental synthesis** — only unsynthesized papers are sent to Claude on each iteration,
   so previously processed papers aren't re-processed during loop-back
-- **Bounded loops** — `max_iterations` (default 3) prevents infinite critic loops
+- **Bounded loops** — `max_iterations` (default 3) prevents infinite corpus critic loops;
+  `max_report_iterations` (default 2) prevents infinite report revision loops
 - **Graceful degradation** — search functions return `[]` on persistent rate limits,
-  Critic defaults to "approve" on parse failures (prevents getting stuck)
+  both Critics default to "approve" on parse failures (prevents getting stuck)
 - **Prompt caching** — system prompts use Anthropic's `cache_control` to save ~90% on input
   tokens for the 2nd+ paper in each batch
 - **Configurable model** — set `ANTHROPIC_MODEL` in `secrets.txt` to use a different Claude model
@@ -101,6 +109,7 @@ lit_review_agent/
 │   ├── synthesis.py       # Synthesis Agent (Claude extraction)
 │   ├── critic.py          # Critic Agent (coverage evaluation)
 │   ├── report.py          # Report Agent (markdown generation)
+│   ├── report_critic.py   # Report Critic Agent (grounding verification)
 │   └── graph.py           # LangGraph wiring + run_review()
 ├── tests/
 │   ├── test_tools_and_synthesis.py  # 23 unit tests (mocked)

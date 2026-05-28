@@ -1,4 +1,4 @@
-"""Unit tests for Critic and Report agents.
+"""Unit tests for Critic, Report, and Report Critic agents.
 
 All Anthropic API calls are mocked.
 """
@@ -15,6 +15,11 @@ from lit_review_agent.critic import (
     critique_corpus,
 )
 from lit_review_agent.report import _format_papers_for_report, generate_report
+from lit_review_agent.report_critic import (
+    _format_corpus_for_verification,
+    critique_report,
+    ReportCriticDecision,
+)
 from lit_review_agent.state import Paper
 
 
@@ -255,3 +260,152 @@ class TestGenerateReport:
         user_msg = call_args.kwargs["messages"][0]["content"]
         for i in range(5):
             assert f"Paper {i}" in user_msg
+
+
+# ---------------------------------------------------------------------------
+# ReportCriticDecision schema
+# ---------------------------------------------------------------------------
+
+
+class TestReportCriticDecision:
+    def test_approve(self):
+        d = ReportCriticDecision(decision="approve", reasoning="Fully grounded.")
+        assert d.decision == "approve"
+        assert d.issues == []
+
+    def test_revise_with_issues(self):
+        d = ReportCriticDecision(
+            decision="revise",
+            issues=[
+                "Report states cohort of 500 for Paper 3 but source shows 200",
+                "Reference to 'Zhang 2023' not found in corpus",
+            ],
+            reasoning="Factual errors found.",
+        )
+        assert d.decision == "revise"
+        assert len(d.issues) == 2
+
+    def test_invalid_decision_rejected(self):
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            ReportCriticDecision(decision="maybe")
+
+
+# ---------------------------------------------------------------------------
+# Report Critic: _format_corpus_for_verification
+# ---------------------------------------------------------------------------
+
+
+class TestFormatCorpusForVerification:
+    def test_includes_all_fields(self):
+        paper = _make_paper(title="AFib Study", doi="10.1/afib")
+        text = _format_corpus_for_verification([paper])
+        assert "AFib Study" in text
+        assert "10.1/afib" in text
+        assert "Apple Watch" in text
+        assert "PPG" in text
+        assert "participant-level" in text
+        assert "Smith J" in text
+
+    def test_handles_missing_fields(self):
+        paper = _make_paper(
+            doi=None,
+            task=None,
+            devices=[],
+            cohort_size=None,
+            split_strategy=None,
+        )
+        text = _format_corpus_for_verification([paper])
+        assert "N/A" in text
+        assert "not extracted" in text
+        assert "not specified" in text
+
+
+# ---------------------------------------------------------------------------
+# Report Critic: critique_report (mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestCritiqueReport:
+    @patch("lit_review_agent.report_critic.get_anthropic_client")
+    def test_returns_approve(self, mock_get_client):
+        response_json = json.dumps(
+            {
+                "decision": "approve",
+                "issues": [],
+                "reasoning": "Report is faithfully grounded.",
+            }
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            response_json
+        )
+        mock_get_client.return_value = mock_client
+
+        papers = [_make_paper(title=f"Paper {i}") for i in range(3)]
+        result = critique_report("test topic", papers, "# Report\nContent here.")
+
+        assert result.decision == "approve"
+        assert result.issues == []
+
+    @patch("lit_review_agent.report_critic.get_anthropic_client")
+    def test_returns_revise_with_issues(self, mock_get_client):
+        response_json = json.dumps(
+            {
+                "decision": "revise",
+                "issues": ["Cohort size mismatch for Paper 3"],
+                "reasoning": "Factual errors detected.",
+            }
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            response_json
+        )
+        mock_get_client.return_value = mock_client
+
+        result = critique_report("test", [_make_paper()], "# Report")
+        assert result.decision == "revise"
+        assert len(result.issues) == 1
+
+    @patch("lit_review_agent.report_critic.get_anthropic_client")
+    def test_defaults_to_approve_on_parse_failure(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response("not json")
+        mock_get_client.return_value = mock_client
+
+        result = critique_report("test", [_make_paper()], "# Report", max_retries=1)
+        assert result.decision == "approve"
+        assert "failed" in result.reasoning.lower()
+
+    @patch("lit_review_agent.report_critic.get_anthropic_client")
+    def test_handles_markdown_fences(self, mock_get_client):
+        fenced = (
+            '```json\n{"decision": "approve", "issues": [], "reasoning": "OK"}\n```'
+        )
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(fenced)
+        mock_get_client.return_value = mock_client
+
+        result = critique_report("test", [_make_paper()], "# Report")
+        assert result.decision == "approve"
+
+    @patch("lit_review_agent.report_critic.get_anthropic_client")
+    def test_passes_report_and_corpus_in_prompt(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            json.dumps({"decision": "approve", "issues": [], "reasoning": "OK"})
+        )
+        mock_get_client.return_value = mock_client
+
+        papers = [_make_paper(title=f"Paper {i}") for i in range(3)]
+        report = "# My Report\n\nFindings about Paper 0."
+        critique_report("test", papers, report)
+
+        call_args = mock_client.messages.create.call_args
+        user_msg = call_args.kwargs["messages"][0]["content"]
+        # Both the report and corpus data should be in the prompt
+        assert "My Report" in user_msg
+        assert "Paper 0" in user_msg
+        assert "Paper 1" in user_msg
+        assert "Paper 2" in user_msg
