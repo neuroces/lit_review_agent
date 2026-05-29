@@ -275,7 +275,8 @@ class TestReportCriticRouter:
     def test_routes_to_end_on_approve(self):
         state = _base_state(
             report_iteration=1,
-            report_critic_feedback=["Report iteration 0: Approved"],
+            max_report_iterations=2,
+            report_critic_feedback=["Report iteration 0 [approve]: All claims grounded"],
         )
         assert report_critic_router(state) == "end"
 
@@ -283,15 +284,15 @@ class TestReportCriticRouter:
         state = _base_state(
             report_iteration=1,
             max_report_iterations=2,
-            report_critic_feedback=["Report iteration 0: Revise needed"],
+            report_critic_feedback=["Report iteration 0 [revise]: truncated table"],
         )
         assert report_critic_router(state) == "report"
 
-    def test_routes_to_end_at_max_iterations(self):
+    def test_routes_to_end_on_max_iterations(self):
         state = _base_state(
             report_iteration=2,
             max_report_iterations=2,
-            report_critic_feedback=["Report iteration 1: Revise needed"],
+            report_critic_feedback=["Report iteration 1 [revise]: Still issues"],
         )
         assert report_critic_router(state) == "end"
 

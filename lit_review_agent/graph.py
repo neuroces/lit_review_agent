@@ -155,7 +155,7 @@ def report_critic_node(state: ReviewState) -> dict:
     feedback = state.get("report_critic_feedback", [])
     if decision.reasoning:
         feedback = feedback + [
-            f"Report iteration {report_iteration}: {decision.reasoning}"
+            f"Report iteration {report_iteration} [{decision.decision}]: {decision.reasoning}"
         ]
 
     return {
@@ -210,7 +210,8 @@ def report_critic_router(state: ReviewState) -> str:
         return "end"
 
     # Check if report critic requested revision
-    if "revise" in last_feedback.lower():
+    # The feedback format is "Report iteration N [decision]: <reasoning>"
+    if last_feedback and "[revise]" in last_feedback.lower():
         logger.info("Report critic router: revision requested → report")
         return "report"
 

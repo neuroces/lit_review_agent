@@ -18,6 +18,7 @@ that this system is designed to address:
 | **No self-correction** — if the review has gaps, you have to manually notice and re-prompt | The Critic agent automatically identifies coverage gaps (missing device types, narrow demographics, underrepresented tasks) and loops back with targeted queries — no human intervention needed. |
 | **Not reproducible** — re-asking the same question produces different results | The search queries, API responses, and structured extractions are deterministic and auditable. The critic feedback trail documents every iteration. |
 | **No methodology comparison** — prose reviews bury methodological differences in paragraphs | The Report agent produces a structured comparison table (devices, cohort sizes, metrics, split strategies) that makes cross-study comparison immediate. |
+| **Prompt-based orchestration is fragile** — you could describe multi-agent roles in a single ChatGPT prompt, but the LLM decides when to loop, what state to pass, and when to stop — with no guarantees on execution order, data flow, or termination | The LangGraph graph enforces deterministic control flow: edges define exactly which node runs next, typed state ensures each agent receives the right data, conditional routers make loop/exit decisions inspectable and testable, and `max_iterations` guarantees termination. The LLM handles what it's good at (extraction, evaluation, writing) while the graph handles orchestration. |
 
 In short: this system treats literature review as a **data pipeline**, not a creative writing task.
 The LLM is used where it excels (extracting structured information from abstracts, evaluating
@@ -180,6 +181,29 @@ pytest tests/ -v
 # Integration tests (real APIs, ~5 min, requires API key)
 pytest tests/test_integration.py -v -m integration
 ```
+
+## Limitations
+
+- **Abstract-only extraction** — The synthesis agent extracts structured fields from paper
+  abstracts only, not full text. Details like split strategy, demographics, and effect sizes
+  are often underreported in abstracts, which limits extraction completeness.
+- **No full-text retrieval** — PubMed and Semantic Scholar APIs return metadata and abstracts.
+  Full-text PDF retrieval and parsing are not yet implemented.
+- **Sequential synthesis** — Papers are synthesized one at a time. For large corpora this
+  can be slow (each paper requires an LLM call).
+- **English-only** — Search queries and extraction prompts assume English-language literature.
+
+## Future Directions
+
+- **Full-text retrieval** — Integrate PubMed Central's open-access API (or Unpaywall) to
+  retrieve full-text papers when available, enabling richer extraction.
+- **Parallel synthesis** — Process multiple papers concurrently to reduce pipeline latency.
+- **Citation graph expansion** — Use Semantic Scholar's citation/reference APIs to discover
+  related papers not found via keyword search.
+- **Structured output from full text** — Extract tables, figures, and supplementary data
+  from PDFs for more detailed methodology comparison.
+- **Export formats** — Generate outputs beyond markdown (e.g., BibTeX, CSV of the comparison
+  table, PRISMA flow diagram).
 
 ## License
 
