@@ -1,6 +1,6 @@
-# Multi-Agent Literature Review System for Health AI Evaluation
+# Multi-Agent Literature Review System
 
-A multi-agent system that takes a Health AI evaluation topic and produces a structured
+A multi-agent system that takes a research topic and produces a structured
 markdown literature review with a methodology comparison table. Built with
 [LangGraph](https://github.com/langchain-ai/langgraph) and the Anthropic API.
 
